@@ -10,6 +10,7 @@ from utils import format_large_numbers
 from styles import load_css
 import plotly.express as px
 
+
 st.cache_data(ttl=3600)
 def get_stock_data(ticker):
         return yf.Ticker(ticker)
@@ -95,19 +96,7 @@ show_volume = st.sidebar.checkbox(
 
 stock = yf.Ticker(ticker)
 
-hist = stock.history(period="1d")
-
-if not hist.empty:
-    current_price = hist["Close"].iloc[-1]
-else:
-    current_price = None
-    
-    current_price = hist["Close"].iloc[-1]
-
-st.metric(
-    "Current Price",
-    f"₹{current_price:,.2f}"
-)
+hist = stock.history(period=period)
 
 try:
     info = stock.fast_info
