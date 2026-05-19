@@ -95,7 +95,14 @@ show_volume = st.sidebar.checkbox(
 
 stock = yf.Ticker(ticker)
 
-hist = stock.history(period=period)
+hist = stock.history(period="1d")
+
+if not hist.empty:
+    current_price = hist["Close"].iloc[-1]
+else:
+    current_price = None
+    
+    st.metric("Current Price", f"₹{current_price:,.2f}")
 
 try:
     info = stock.fast_info
