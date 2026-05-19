@@ -89,8 +89,8 @@ plt.scatter(
 x_vals = df["Nifty_Returns"]
 
 y_vals = (
-    model.params[0]
-    + model.params[1] * x_vals
+    model.params.iloc[0]
+    + model.params.iloc[1] * x_vals
 )
 
 plt.plot(x_vals, y_vals)
