@@ -10,6 +10,10 @@ from utils import format_large_numbers
 from styles import load_css
 import plotly.express as px
 
+st.cache_data(ttl=3600)
+def get_stock_data(ticker):
+        return yf.Ticker(ticker)
+
 # ---------------------------------------------------
 # PAGE CONFIG
 # ---------------------------------------------------
@@ -93,7 +97,10 @@ stock = yf.Ticker(ticker)
 
 hist = stock.history(period=period)
 
-info = stock.info
+try:
+    info = stock.fast_info
+except:
+    info = {}
 
 financials = stock.financials
 
