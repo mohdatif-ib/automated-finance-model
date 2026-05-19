@@ -102,7 +102,12 @@ if not hist.empty:
 else:
     current_price = None
     
-    st.metric("Current Price", f"₹{current_price:,.2f}")
+    current_price = hist["Close"].iloc[-1]
+
+st.metric(
+    "Current Price",
+    f"₹{current_price:,.2f}"
+)
 
 try:
     info = stock.fast_info
