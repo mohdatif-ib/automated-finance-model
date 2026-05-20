@@ -105,6 +105,112 @@ def get_close_series(price_data):
     return price_data["Close"].dropna()
 
 
+def is_valid_number(value):
+    return (
+        isinstance(value, Number)
+        and not isinstance(value, bool)
+        and math.isfinite(value)
+    )
+
+
+def to_number(value):
+    try:
+        numeric_value = pd.to_numeric(value)
+    except Exception:
+        return None
+
+    if is_valid_number(numeric_value):
+        return float(numeric_value)
+
+    return None
+
+
+def get_first_value(sources, keys):
+    for source in sources:
+        if not source:
+            continue
+
+        for key in keys:
+            try:
+                if hasattr(source, "get"):
+                    value = source.get(key)
+                else:
+                    value = source[key]
+            except Exception:
+                continue
+
+            if value is None:
+                continue
+
+            try:
+                if pd.isna(value):
+                    continue
+            except Exception:
+                pass
+
+            if is_valid_number(value) and value == 0:
+                continue
+
+            if str(value).strip():
+                return value
+
+    return None
+
+
+def get_latest_statement_value(statement, row_names):
+    if statement is None or statement.empty:
+        return None
+
+    for row_name in row_names:
+        if row_name in statement.index:
+            values = pd.to_numeric(
+                statement.loc[row_name],
+                errors="coerce"
+            ).dropna()
+
+            if not values.empty:
+                return float(values.iloc[0])
+
+    return None
+
+
+def normalize_dividend_yield(value):
+    value = to_number(value)
+
+    if not is_valid_number(value):
+        return None
+
+    if value > 1:
+        return value / 100
+
+    return value
+
+
+def get_recent_dividend_yield(stock, current_price):
+    if not is_valid_number(current_price) or current_price <= 0:
+        return None
+
+    try:
+        dividends = stock.dividends
+    except Exception:
+        return None
+
+    if dividends is None or dividends.empty:
+        return None
+
+    try:
+        cutoff = dividends.index.max() - pd.DateOffset(years=1)
+        recent_dividends = dividends[dividends.index >= cutoff]
+        annual_dividend = recent_dividends.sum()
+    except Exception:
+        annual_dividend = dividends.tail(4).sum()
+
+    if not is_valid_number(annual_dividend) or annual_dividend <= 0:
+        return None
+
+    return annual_dividend / current_price
+
+
 def normalize_to_dates(series):
     normalized = series.copy()
     normalized.index = (
@@ -277,7 +383,15 @@ try:
 except:
     info = {}
 
-currency = info.get("currency") or (
+try:
+    fast_info = stock.fast_info
+except:
+    fast_info = {}
+
+currency = get_first_value(
+    [info, fast_info],
+    ["currency"]
+) or (
     "INR" if ticker.endswith((".NS", ".BO")) or ticker == "^NSEI" else "USD"
 )
 
@@ -330,11 +444,52 @@ with tab1:
     except:
         current_price = 0
 
-    market_cap = info.get("marketCap")
+    market_cap = get_first_value(
+        [info, fast_info],
+        ["marketCap", "market_cap"]
+    )
+    market_cap = to_number(market_cap)
 
-    pe_ratio = info.get("trailingPE")
+    shares_outstanding = get_first_value(
+        [info, fast_info],
+        ["sharesOutstanding", "shares"]
+    )
+    shares_outstanding = to_number(shares_outstanding)
 
-    dividend_yield = info.get("dividendYield")
+    if not is_valid_number(market_cap) and is_valid_number(shares_outstanding):
+        market_cap = shares_outstanding * current_price
+
+    pe_ratio = get_first_value(
+        [info],
+        ["trailingPE", "forwardPE"]
+    )
+    pe_ratio = to_number(pe_ratio)
+
+    if not is_valid_number(pe_ratio) and is_valid_number(market_cap):
+        latest_net_income = get_latest_statement_value(
+            financials,
+            ["Net Income", "Net Income Common Stockholders"]
+        )
+
+        if is_valid_number(latest_net_income) and latest_net_income > 0:
+            pe_ratio = market_cap / latest_net_income
+
+    dividend_yield = normalize_dividend_yield(
+        get_first_value(
+            [info, fast_info],
+            [
+                "dividendYield",
+                "trailingAnnualDividendYield",
+                "yield"
+            ]
+        )
+    )
+
+    if dividend_yield is None:
+        dividend_yield = get_recent_dividend_yield(
+            stock,
+            current_price
+        )
     
     market_cap_display = (
         format_money(market_cap, currency)
@@ -353,9 +508,6 @@ with tab1:
     if dividend_yield
     else "N/A"
 )
-
-    if dividend_yield:
-        dividend_yield = f"{dividend_yield * 100:.2f}%"
 
     col1, col2, col3, col4, col5 = st.columns(5)
 
