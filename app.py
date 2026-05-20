@@ -85,6 +85,12 @@ period = st.sidebar.selectbox(
     index=3
 )
 
+interval = st.sidebar.selectbox(
+    "Price Interval",
+    ["1d", "1wk", "1mo"],
+    index=0
+)
+
 show_volume = st.sidebar.checkbox(
     "Show Volume",
     value=True
@@ -96,7 +102,10 @@ show_volume = st.sidebar.checkbox(
 
 stock = yf.Ticker(ticker)
 
-hist = stock.history(period=period)
+hist = stock.history(
+    period=period,
+    interval=interval
+)
 
 try:
     info = stock.fast_info
@@ -125,11 +134,12 @@ st.caption(
 # TABS
 # ---------------------------------------------------
 
-tab1, tab2, tab3, tab4 = st.tabs([
+tab1, tab2, tab3, tab4, tab5 = st.tabs([
     "Overview",
     "Financials",
     "DCF Valuation",
-    "News"
+    "News",
+    "Historical Prices"
 ])
 
 # ===================================================
@@ -917,7 +927,98 @@ with tab4:
         st.info(
             "No news available."
         )
+# ===================================================
+# HISTORICAL PRICES TAB
+# ===================================================
 
+with tab5:
+
+    st.subheader("📈 Historical Price Data")
+
+    col1, col2, col3, col4 = st.columns(4)
+
+    try:
+
+        high_52 = hist["High"].max()
+
+        low_52 = hist["Low"].min()
+
+        avg_volume = int(hist["Volume"].mean())
+
+        latest_close = hist["Close"].iloc[-1]
+
+        col1.metric(
+            "Latest Close",
+            f"₹{latest_close:.2f}"
+        )
+
+        col2.metric(
+            "Period High",
+            f"₹{high_52:.2f}"
+        )
+
+        col3.metric(
+            "Period Low",
+            f"₹{low_52:.2f}"
+        )
+
+        col4.metric(
+            "Avg Volume",
+            f"{avg_volume:,}"
+        )
+
+    except:
+        pass
+
+    st.markdown("### Download Historical Prices")
+
+    csv = hist.to_csv().encode("utf-8")
+
+    st.download_button(
+        label="⬇ Download CSV",
+        data=csv,
+        file_name=f"{ticker}_historical_prices.csv",
+        mime="text/csv"
+    )
+
+    st.markdown("### Price Table")
+
+    display_df = hist.copy()
+
+    display_df.index = (
+        display_df.index
+        .strftime("%Y-%m-%d")
+    )
+
+    st.dataframe(
+        display_df,
+        use_container_width=True
+    )
+
+    st.markdown("### Returns Distribution")
+
+    returns = (
+        hist["Close"]
+        .pct_change()
+        .dropna()
+    )
+
+    fig = px.histogram(
+        returns,
+        nbins=40,
+        title="Daily Return Distribution"
+    )
+
+    fig.update_layout(
+        template="plotly_dark"
+    )
+
+    st.plotly_chart(
+        fig,
+        use_container_width=True,
+        key="returns_distribution"
+    )
+    
 # ---------------------------------------------------
 # FOOTER
 # ---------------------------------------------------
