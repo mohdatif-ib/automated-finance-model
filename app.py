@@ -1088,7 +1088,10 @@ with tab5:
 
     st.markdown("### Download Historical Prices")
 
-    csv = hist.to_csv().encode("utf-8")
+    csv_df = hist.copy()
+    csv_df.index = csv_df.index.strftime("%Y-%m-%d")
+
+    csv = csv_df.to_csv().encode("utf-8")
 
     st.download_button(
         label="⬇ Download CSV",
