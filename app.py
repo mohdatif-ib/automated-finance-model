@@ -9,9 +9,10 @@ from modules.indicators import add_indicators
 from utils import format_large_numbers
 from styles import load_css
 import plotly.express as px
+import pandas as pd
 
 
-st.cache_data(ttl=3600)
+@st.cache_data(ttl=3600)
 def get_stock_data(ticker):
         return yf.Ticker(ticker)
 
@@ -60,6 +61,7 @@ div[data-testid="stExpander"] {
 st.sidebar.title("📊 Dashboard Settings")
 
 company_dict = {
+    "NIFTY 50": "^NSEI",
     "Reliance Industries": "RELIANCE.NS",
     "TCS": "TCS.NS",
     "Infosys": "INFY.NS",
@@ -107,8 +109,58 @@ hist = stock.history(
     interval=interval
 )
 
+# ------------------------------
+# CALCULATED BETA VS NIFTY 50
+# ------------------------------
+
 try:
-    info = stock.fast_info
+
+    nifty = yf.download(
+        "^NSEI",
+        period="2y",
+        auto_adjust=True,
+        progress=False
+    )
+
+    stock_beta_data = yf.download(
+        ticker,
+        period="2y",
+        auto_adjust=True,
+        progress=False
+    )
+
+    stock_returns = (
+        stock_beta_data["Close"]
+        .pct_change()
+        .dropna()
+    )
+
+    nifty_returns = (
+        nifty["Close"]
+        .pct_change()
+        .dropna()
+    )
+
+    beta_df = pd.concat(
+        [stock_returns, nifty_returns],
+        axis=1
+    ).dropna()
+
+    beta_df.columns = [
+        "Stock",
+        "Market"
+    ]
+
+    beta = (
+        beta_df.cov().iloc[0, 1]
+        /
+        beta_df["Market"].var()
+    )
+
+except:
+    beta = None
+try:
+    info = stock.info
 except:
     info = {}
 
@@ -154,15 +206,34 @@ with tab1:
     # METRICS
     # ------------------------------
 
-    current_price = info.get("currentPrice", 0)
+    try:
+        current_price = hist["Close"].iloc[-1]
+    except:
+        current_price = 0
 
-    market_cap = info.get("marketCap", 0)
+    market_cap = info.get("marketCap")
 
-    pe_ratio = info.get("trailingPE", "N/A")
+    pe_ratio = info.get("trailingPE")
 
-    dividend_yield = info.get("dividendYield", 0)
+    dividend_yield = info.get("dividendYield")
+    
+    market_cap_display = (
+    f"₹{market_cap/1e12:.2f} T"
+    if market_cap
+    else "N/A"
+)
 
-    beta = info.get("beta", "N/A")
+    pe_display = (
+    f"{pe_ratio:.2f}"
+    if pe_ratio
+    else "N/A"
+)
+
+    dividend_display = (
+    f"{dividend_yield*100:.2f}%"
+    if dividend_yield
+    else "N/A"
+)
 
     if market_cap:
         market_cap = f"{market_cap / 1e12:.2f} T"
@@ -178,23 +249,23 @@ with tab1:
     )
 
     col2.metric(
-        "Market Cap",
-        market_cap
-    )
+    "Market Cap",
+    market_cap_display
+)
 
     col3.metric(
-        "P/E Ratio",
-        pe_ratio
-    )
+    "P/E Ratio",
+    pe_display
+)
 
     col4.metric(
-        "Dividend Yield",
-        dividend_yield
-    )
+    "Dividend Yield",
+    dividend_display
+)
 
     col5.metric(
-        "Beta",
-        beta
+    "Beta",
+    f"{beta:.2f}" if beta is not None else "N/A"
     )
 
 
@@ -210,8 +281,37 @@ with tab1:
     fig,
     use_container_width=True,
     key="main_chart"
-)
+    )
 
+    st.subheader("📊 Performance vs NIFTY 50")
+    
+    nifty = yf.Ticker("^NSEI")
+    
+    nifty_hist = nifty.history(period=period)
+    
+    comparison = hist[["Close"]].copy()
+    comparison.columns = [company]
+    
+    comparison["NIFTY 50"] = nifty_hist["Close"]
+    
+    comparison = comparison.dropna()
+    
+    comparison = comparison / comparison.iloc[0] * 100
+    
+    fig = px.line(
+        comparison,
+        title=f"{company} vs NIFTY 50 (Base = 100)"
+    )
+    
+    fig.update_layout(
+        template="plotly_dark",
+        height=500
+    )
+    
+    st.plotly_chart(
+        fig,
+        use_container_width=True
+    )
     # ------------------------------
     # RETURNS
     # ------------------------------
@@ -239,7 +339,23 @@ with tab1:
         "Annualized Volatility",
         f"{volatility:.2f}%"
     )
-
+    
+    nifty_return = (
+    (nifty_hist["Close"].iloc[-1] /
+    nifty_hist["Close"].iloc[0]) - 1
+    ) * 100
+    
+    col8, col9 = st.columns(2)
+    
+    col8.metric(
+        "Stock Return",
+        f"{total_return:.2f}%"
+    )
+    
+    col9.metric(
+        "NIFTY Return",
+        f"{nifty_return:.2f}%"
+    )
     # ------------------------------
     # BUSINESS SUMMARY
     # ------------------------------
