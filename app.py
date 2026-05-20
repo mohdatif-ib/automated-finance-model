@@ -6,7 +6,7 @@ import streamlit as st
 import yfinance as yf
 from modules.charts import create_candlestick_chart
 from modules.indicators import add_indicators
-from utils import format_large_numbers
+from utils import format_large_numbers, format_money, get_currency_symbol
 from styles import load_css
 import plotly.express as px
 import pandas as pd
@@ -15,6 +15,52 @@ import pandas as pd
 @st.cache_data(ttl=3600)
 def get_stock_data(ticker):
         return yf.Ticker(ticker)
+
+
+def get_market_benchmark(ticker):
+    indian_ticker = ticker == "^NSEI" or ticker.endswith((".NS", ".BO"))
+
+    if indian_ticker:
+        return "^NSEI", "NIFTY 50"
+
+    return "^GSPC", "S&P 500"
+
+
+def get_close_series(price_data):
+    if price_data is None or price_data.empty:
+        return pd.Series(dtype="float64")
+
+    if isinstance(price_data.columns, pd.MultiIndex):
+        if "Close" not in price_data.columns.get_level_values(0):
+            return pd.Series(dtype="float64")
+        close = price_data["Close"]
+        if isinstance(close, pd.DataFrame):
+            close = close.iloc[:, 0]
+        return close.dropna()
+
+    if "Close" not in price_data.columns:
+        return pd.Series(dtype="float64")
+
+    return price_data["Close"].dropna()
+
+
+def normalize_to_dates(series):
+    normalized = series.copy()
+    normalized.index = (
+        pd.DatetimeIndex(normalized.index)
+        .tz_localize(None)
+        .normalize()
+    )
+    return normalized
+
+
+def get_statement_scale(currency):
+    currency = (currency or "").upper()
+
+    if currency == "INR":
+        return 1e7, f"{get_currency_symbol(currency)} Cr"
+
+    return 1e9, f"{get_currency_symbol(currency)} B"
 
 # ---------------------------------------------------
 # PAGE CONFIG
@@ -80,6 +126,7 @@ company = st.sidebar.selectbox(
 )
 
 ticker = company_dict[company]
+benchmark_ticker, benchmark_name = get_market_benchmark(ticker)
 
 period = st.sidebar.selectbox(
     "Select Time Period",
@@ -109,14 +156,20 @@ hist = stock.history(
     interval=interval
 )
 
+if hist.empty:
+    st.error(
+        f"No price data returned for {company} ({ticker}). Try another ticker or time period."
+    )
+    st.stop()
+
 # ------------------------------
-# CALCULATED BETA VS NIFTY 50
+# CALCULATED BETA VS MARKET BENCHMARK
 # ------------------------------
 
 try:
 
-    nifty = yf.download(
-        "^NSEI",
+    benchmark_data = yf.download(
+        benchmark_ticker,
         period="2y",
         auto_adjust=True,
         progress=False
@@ -129,22 +182,21 @@ try:
         progress=False
     )
 
-    stock_returns = (
-        stock_beta_data["Close"]
-        .pct_change()
-        .dropna()
-    )
+    stock_returns = normalize_to_dates(
+        get_close_series(stock_beta_data)
+    ).pct_change().dropna()
 
-    nifty_returns = (
-        nifty["Close"]
-        .pct_change()
-        .dropna()
-    )
+    benchmark_returns = normalize_to_dates(
+        get_close_series(benchmark_data)
+    ).pct_change().dropna()
 
     beta_df = pd.concat(
-        [stock_returns, nifty_returns],
+        [stock_returns, benchmark_returns],
         axis=1
     ).dropna()
+
+    if beta_df.empty:
+        raise ValueError("No overlapping return dates")
 
     beta_df.columns = [
         "Stock",
@@ -163,6 +215,12 @@ try:
     info = stock.info
 except:
     info = {}
+
+currency = info.get("currency") or (
+    "INR" if ticker.endswith((".NS", ".BO")) or ticker == "^NSEI" else "USD"
+)
+
+statement_divisor, statement_unit = get_statement_scale(currency)
 
 financials = stock.financials
 
@@ -218,10 +276,10 @@ with tab1:
     dividend_yield = info.get("dividendYield")
     
     market_cap_display = (
-    f"₹{market_cap/1e12:.2f} T"
-    if market_cap
-    else "N/A"
-)
+        format_money(market_cap, currency)
+        if market_cap
+        else "N/A"
+    )
 
     pe_display = (
     f"{pe_ratio:.2f}"
@@ -235,9 +293,6 @@ with tab1:
     else "N/A"
 )
 
-    if market_cap:
-        market_cap = f"{market_cap / 1e12:.2f} T"
-
     if dividend_yield:
         dividend_yield = f"{dividend_yield * 100:.2f}%"
 
@@ -245,7 +300,7 @@ with tab1:
 
     col1.metric(
         "Current Price",
-        f"₹{current_price:.2f}"
+        format_money(current_price, currency, compact=False)
     )
 
     col2.metric(
@@ -283,35 +338,43 @@ with tab1:
     key="main_chart"
     )
 
-    st.subheader("📊 Performance vs NIFTY 50")
+    st.subheader(f"📊 Performance vs {benchmark_name}")
     
-    nifty = yf.Ticker("^NSEI")
+    benchmark_stock = yf.Ticker(benchmark_ticker)
     
-    nifty_hist = nifty.history(period=period)
+    benchmark_hist = benchmark_stock.history(period=period)
     
-    comparison = hist[["Close"]].copy()
-    comparison.columns = [company]
+    stock_close = normalize_to_dates(hist["Close"])
+    benchmark_close = normalize_to_dates(get_close_series(benchmark_hist))
     
-    comparison["NIFTY 50"] = nifty_hist["Close"]
+    comparison = pd.concat(
+        [stock_close, benchmark_close],
+        axis=1
+    ).dropna()
+
+    comparison.columns = [company, benchmark_name]
     
-    comparison = comparison.dropna()
+    if not comparison.empty:
+        comparison = comparison / comparison.iloc[0] * 100
     
-    comparison = comparison / comparison.iloc[0] * 100
+        fig = px.line(
+            comparison,
+            title=f"{company} vs {benchmark_name} (Base = 100)"
+        )
     
-    fig = px.line(
-        comparison,
-        title=f"{company} vs NIFTY 50 (Base = 100)"
-    )
+        fig.update_layout(
+            template="plotly_dark",
+            height=500
+        )
     
-    fig.update_layout(
-        template="plotly_dark",
-        height=500
-    )
-    
-    st.plotly_chart(
-        fig,
-        use_container_width=True
-    )
+        st.plotly_chart(
+            fig,
+            use_container_width=True
+        )
+    else:
+        st.info(
+            f"Performance comparison unavailable because {company} and {benchmark_name} have no overlapping dates."
+        )
     # ------------------------------
     # RETURNS
     # ------------------------------
@@ -340,10 +403,13 @@ with tab1:
         f"{volatility:.2f}%"
     )
     
-    nifty_return = (
-    (nifty_hist["Close"].iloc[-1] /
-    nifty_hist["Close"].iloc[0]) - 1
-    ) * 100
+    try:
+        benchmark_return = (
+            (benchmark_close.iloc[-1] /
+             benchmark_close.iloc[0]) - 1
+        ) * 100
+    except:
+        benchmark_return = None
     
     col8, col9 = st.columns(2)
     
@@ -353,8 +419,8 @@ with tab1:
     )
     
     col9.metric(
-        "NIFTY Return",
-        f"{nifty_return:.2f}%"
+        f"{benchmark_name} Return",
+        f"{benchmark_return:.2f}%" if benchmark_return is not None else "N/A"
     )
     # ------------------------------
     # BUSINESS SUMMARY
@@ -426,11 +492,11 @@ with tab2:
                     "Revenue"
                 ]
 
-                # Convert to Crores
+                # Scale statement values for the selected listing currency.
 
                 revenue_df["Revenue"] = (
                     revenue_df["Revenue"]
-                    / 1e7
+                    / statement_divisor
                 )
 
                 fig = px.line(
@@ -451,7 +517,7 @@ with tab2:
 
                     xaxis_title="Year",
 
-                    yaxis_title="Revenue (₹ Cr)",
+                    yaxis_title=f"Revenue ({statement_unit})",
 
                     margin=dict(
                         l=20,
@@ -499,7 +565,7 @@ with tab2:
 
                 net_income_df["Net Income"] = (
                     net_income_df["Net Income"]
-                    / 1e7
+                    / statement_divisor
                 )
 
                 fig = px.line(
@@ -520,7 +586,7 @@ with tab2:
 
                     xaxis_title="Year",
 
-                    yaxis_title="Net Income (₹ Cr)",
+                    yaxis_title=f"Net Income ({statement_unit})",
 
                     margin=dict(
                         l=20,
@@ -548,7 +614,8 @@ with tab2:
 
             st.dataframe(
                 format_large_numbers(
-                    income_display.T
+                    income_display.T,
+                    currency
                 ),
                 use_container_width=True
             )
@@ -608,7 +675,7 @@ with tab2:
 
                 assets_df["Assets"] = (
                     assets_df["Assets"]
-                    / 1e7
+                    / statement_divisor
                 )
 
                 fig = px.line(
@@ -629,7 +696,7 @@ with tab2:
 
                     xaxis_title="Year",
 
-                    yaxis_title="Assets (₹ Cr)"
+                    yaxis_title=f"Assets ({statement_unit})"
                 )
 
                 fig.update_traces(
@@ -650,7 +717,8 @@ with tab2:
 
             st.dataframe(
                 format_large_numbers(
-                    balance_display.T
+                    balance_display.T,
+                    currency
                 ),
                 use_container_width=True
             )
@@ -709,7 +777,7 @@ with tab2:
 
                 fcf_df["FCF"] = (
                     fcf_df["FCF"]
-                    / 1e7
+                    / statement_divisor
                 )
 
                 fig = px.line(
@@ -730,7 +798,7 @@ with tab2:
 
                     xaxis_title="Year",
 
-                    yaxis_title="FCF (₹ Cr)"
+                    yaxis_title=f"FCF ({statement_unit})"
                 )
 
                 fig.update_traces(
@@ -751,7 +819,8 @@ with tab2:
 
             st.dataframe(
                 format_large_numbers(
-                    cashflow_display.T
+                    cashflow_display.T,
+                    currency
                 ),
                 use_container_width=True
             )
@@ -955,12 +1024,12 @@ with tab3:
 
         col1.metric(
             "Intrinsic Value",
-            f"₹{intrinsic_value:.2f}"
+            format_money(intrinsic_value, currency, compact=False)
         )
 
         col2.metric(
             "Current Price",
-            f"₹{current_price:.2f}"
+            format_money(current_price, currency, compact=False)
         )
 
         col3.metric(
@@ -977,7 +1046,7 @@ with tab3:
         ):
 
             st.write(
-                f"Free Cash Flow: {fcf:,.0f}"
+                f"Free Cash Flow: {format_money(fcf, currency)}"
             )
 
             st.write(
@@ -1065,17 +1134,17 @@ with tab5:
 
         col1.metric(
             "Latest Close",
-            f"₹{latest_close:.2f}"
+            format_money(latest_close, currency, compact=False)
         )
 
         col2.metric(
             "Period High",
-            f"₹{high_52:.2f}"
+            format_money(high_52, currency, compact=False)
         )
 
         col3.metric(
             "Period Low",
-            f"₹{low_52:.2f}"
+            format_money(low_52, currency, compact=False)
         )
 
         col4.metric(
