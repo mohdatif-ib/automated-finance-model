@@ -6,10 +6,71 @@ import streamlit as st
 import yfinance as yf
 from modules.charts import create_candlestick_chart
 from modules.indicators import add_indicators
-from utils import format_large_numbers, format_money, get_currency_symbol
 from styles import load_css
+import importlib
+import math
+from numbers import Number
 import plotly.express as px
 import pandas as pd
+import utils as finance_utils
+
+
+finance_utils = importlib.reload(finance_utils)
+
+
+try:
+    format_money = finance_utils.format_money
+    get_currency_symbol = finance_utils.get_currency_symbol
+    format_large_numbers = finance_utils.format_large_numbers
+except AttributeError:
+    CURRENCY_SYMBOLS = {
+        "INR": "₹",
+        "USD": "$",
+        "EUR": "€",
+        "GBP": "£",
+        "JPY": "¥",
+        "CNY": "¥",
+        "CAD": "C$",
+        "AUD": "A$",
+        "CHF": "CHF ",
+        "HKD": "HK$",
+    }
+
+    def get_currency_symbol(currency):
+        if not currency:
+            return ""
+
+        return CURRENCY_SYMBOLS.get(currency.upper(), f"{currency.upper()} ")
+
+    def format_money(num, currency="INR", compact=True):
+        if not isinstance(num, Number) or isinstance(num, bool) or not math.isfinite(num):
+            return "N/A"
+
+        symbol = get_currency_symbol(currency)
+
+        if not compact:
+            return f"{symbol}{num:,.2f}"
+
+        for value, suffix in [
+            (1e12, "T"),
+            (1e9, "B"),
+            (1e6, "M"),
+            (1e3, "K"),
+        ]:
+            if abs(num) >= value:
+                return f"{symbol}{num / value:.2f} {suffix}"
+
+        return f"{symbol}{num:.2f}"
+
+    def format_large_numbers(df, currency="INR"):
+        formatted_df = df.copy()
+
+        for col in formatted_df.columns:
+            formatted_df[col] = formatted_df[col].apply(
+                lambda value: format_money(value, currency)
+            )
+
+        return formatted_df
 
 
 @st.cache_data(ttl=3600)
