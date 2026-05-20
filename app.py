@@ -1088,10 +1088,15 @@ with tab5:
 
     st.markdown("### Download Historical Prices")
 
-    csv_df = hist.copy()
-    csv_df.index = csv_df.index.strftime("%Y-%m-%d")
+    csv_df = hist.copy().reset_index()
+    date_column = csv_df.columns[0]
+    csv_df[date_column] = (
+        pd.to_datetime(csv_df[date_column])
+        .dt.strftime("%Y-%m-%d")
+    )
+    csv_df = csv_df.rename(columns={date_column: "Date"})
 
-    csv = csv_df.to_csv().encode("utf-8")
+    csv = csv_df.to_csv(index=False).encode("utf-8-sig")
 
     st.download_button(
         label="⬇ Download CSV",
