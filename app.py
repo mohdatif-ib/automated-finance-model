@@ -414,8 +414,6 @@ balance_sheet = stock.balance_sheet
 
 cashflow = stock.cashflow
 
-news = stock.news
-
 # ---------------------------------------------------
 # TITLE
 # ---------------------------------------------------
@@ -430,11 +428,10 @@ st.caption(
 # TABS
 # ---------------------------------------------------
 
-tab1, tab2, tab3, tab4, tab5 = st.tabs([
+tab1, tab2, tab3, tab4 = st.tabs([
     "Overview",
     "Financials",
     "DCF Valuation",
-    "News",
     "Historical Prices"
 ])
 
@@ -1294,53 +1291,10 @@ with tab3:
         st.code(str(e))
 
 # ===================================================
-# NEWS TAB
-# ===================================================
-
-with tab4:
-
-    st.subheader("📰 Latest News")
-
-    if news:
-
-        for article in news[:5]:
-
-            with st.container(border=True):
-
-                st.subheader(
-                    article.get(
-                        "title",
-                        "No Title"
-                    )
-                )
-
-                st.caption(
-                    article.get(
-                        "publisher",
-                        "Unknown"
-                    )
-                )
-
-                link = article.get(
-                    "link",
-                    "#"
-                )
-
-                st.link_button(
-                    "Read Article",
-                    link
-                )
-
-    else:
-
-        st.info(
-            "No news available."
-        )
-# ===================================================
 # HISTORICAL PRICES TAB
 # ===================================================
 
-with tab5:
+with tab4:
 
     st.subheader("📈 Historical Price Data")
 
@@ -1450,6 +1404,5 @@ st.markdown("""
 - Financial statements
 - Automated DCF valuation
 - Interactive DCF sliders
-- News integration
 - Multi-tab professional UI
 """)
