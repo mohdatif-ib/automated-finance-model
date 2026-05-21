@@ -13,6 +13,7 @@ from numbers import Number
 import plotly.express as px
 import pandas as pd
 import utils as finance_utils
+from pages.monte_carlo_dcf import render_monte_carlo_dcf
 
 
 finance_utils = importlib.reload(finance_utils)
@@ -272,6 +273,16 @@ div[data-testid="stExpander"] {
 # ---------------------------------------------------
 
 st.sidebar.title("📊 Dashboard Settings")
+
+page = st.sidebar.radio(
+    "Menu",
+    ["Dashboard", "Monte Carlo DCF"],
+    index=0
+)
+
+if page == "Monte Carlo DCF":
+    render_monte_carlo_dcf(default_ticker="RELIANCE.NS")
+    st.stop()
 
 company_dict = {
     "NIFTY 50": "^NSEI",
