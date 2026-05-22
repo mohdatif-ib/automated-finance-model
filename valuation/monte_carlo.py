@@ -51,6 +51,24 @@ def run_monte_carlo_dcf(
 
 def valuation_statistics(results: pd.DataFrame) -> dict:
     values = results["intrinsic_value_per_share"].replace([np.inf, -np.inf], np.nan).dropna()
+    if values.empty:
+        empty = {
+            "mean": np.nan,
+            "median": np.nan,
+            "mode": np.nan,
+            "std_dev": np.nan,
+            "min": np.nan,
+            "max": np.nan,
+            "p5": np.nan,
+            "p10": np.nan,
+            "p25": np.nan,
+            "p50": np.nan,
+            "p75": np.nan,
+            "p90": np.nan,
+            "p95": np.nan,
+        }
+        return empty
+
     percentiles = np.percentile(values, [5, 10, 25, 50, 75, 90, 95])
 
     hist_counts, hist_edges = np.histogram(values, bins=80)
@@ -77,6 +95,15 @@ def valuation_statistics(results: pd.DataFrame) -> dict:
 def probability_analysis(results: pd.DataFrame, current_price: float) -> dict:
     values = results["intrinsic_value_per_share"].replace([np.inf, -np.inf], np.nan).dropna()
     current_price = float(current_price or 0.0)
+    if values.empty:
+        return {
+            "current_price": current_price,
+            "fair_value_mean": np.nan,
+            "probability_undervalued": np.nan,
+            "probability_overvalued": np.nan,
+            "margin_of_safety": np.nan,
+        }
+
     fair_value_mean = float(values.mean())
 
     if current_price <= 0:
@@ -181,4 +208,3 @@ def tornado_analysis(assumptions: dict, forecast_years: int) -> pd.DataFrame:
         )
 
     return pd.DataFrame(rows).sort_values("Impact", ascending=True)
-

@@ -6,6 +6,7 @@ import streamlit as st
 import yfinance as yf
 from modules.charts import create_candlestick_chart
 from modules.indicators import add_indicators
+from modules.nifty50 import nifty_50_company_options
 from styles import load_css
 import importlib
 import math
@@ -284,19 +285,7 @@ if page == "Monte Carlo DCF":
     render_monte_carlo_dcf(default_ticker="RELIANCE.NS")
     st.stop()
 
-company_dict = {
-    "NIFTY 50": "^NSEI",
-    "Reliance Industries": "RELIANCE.NS",
-    "TCS": "TCS.NS",
-    "Infosys": "INFY.NS",
-    "HDFC Bank": "HDFCBANK.NS",
-    "ICICI Bank": "ICICIBANK.NS",
-    "State Bank of India": "SBIN.NS",
-    "Apple": "AAPL",
-    "Microsoft": "MSFT",
-    "NVIDIA": "NVDA",
-    "Amazon": "AMZN"
-}
+company_dict = nifty_50_company_options()
 
 company = st.sidebar.selectbox(
     "Select Company",

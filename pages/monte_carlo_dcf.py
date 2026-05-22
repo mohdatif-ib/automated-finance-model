@@ -4,6 +4,7 @@ from io import StringIO
 import time
 
 import pandas as pd
+import plotly.express as px
 import streamlit as st
 import yfinance as yf
 
@@ -14,6 +15,7 @@ from charts.monte_carlo_charts import (
     create_tornado_chart,
 )
 from utils import format_money
+from modules.nifty50 import NIFTY_50_COMPANIES
 from valuation.assumptions import build_baseline_assumptions
 from valuation.dcf import calculate_dcf, forecast_dcf_schedule
 from valuation.monte_carlo import (
@@ -67,6 +69,242 @@ def load_company_financial_data(ticker: str) -> dict:
         "history": hist,
         "current_price": current_price,
     }
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def calculate_company_monte_carlo_summary(
+    company_name: str,
+    ticker: str,
+    simulation_count: int,
+    forecast_years: int,
+    random_seed: int,
+) -> dict:
+    try:
+        data = load_company_financial_data(ticker)
+        baseline = build_baseline_assumptions(
+            ticker=ticker,
+            info=data["info"],
+            fast_info=data["fast_info"],
+            financials=data["financials"],
+            balance_sheet=data["balance_sheet"],
+            cashflow=data["cashflow"],
+            current_price=data["current_price"],
+        )
+
+        if baseline.base_revenue <= 0:
+            return {
+                "Company": company_name,
+                "Ticker": ticker,
+                "Status": "No revenue data",
+            }
+
+        assumptions = baseline.to_dict()
+        assumptions["terminal_growth_mean"] = min(
+            assumptions["terminal_growth_mean"],
+            assumptions["wacc_mean"] - 0.005,
+        )
+
+        results = run_monte_carlo_dcf(
+            assumptions=assumptions,
+            simulation_count=simulation_count,
+            forecast_years=forecast_years,
+            random_seed=random_seed,
+        )
+        stats = valuation_statistics(results)
+        probability = probability_analysis(results, assumptions["current_price"])
+
+        current_price = probability["current_price"]
+        fair_value_mean = probability["fair_value_mean"]
+        upside_to_mean = (
+            (fair_value_mean - current_price) / current_price
+            if current_price and pd.notna(fair_value_mean)
+            else pd.NA
+        )
+
+        return {
+            "Company": company_name,
+            "Ticker": ticker,
+            "Yahoo Name": baseline.company_name,
+            "Currency": baseline.currency,
+            "Current Price": current_price,
+            "Fair Value Mean": fair_value_mean,
+            "Median Value": stats["median"],
+            "Bear Case P10": stats["p10"],
+            "Bull Case P90": stats["p90"],
+            "Probability Undervalued": probability["probability_undervalued"],
+            "Margin of Safety": probability["margin_of_safety"],
+            "Upside to Mean": upside_to_mean,
+            "Revenue Growth Mean": assumptions["revenue_growth_mean"],
+            "EBIT Margin Mean": assumptions["ebit_margin_mean"],
+            "WACC Mean": assumptions["wacc_mean"],
+            "Terminal Growth Mean": assumptions["terminal_growth_mean"],
+            "Status": "OK",
+        }
+    except Exception as exc:
+        return {
+            "Company": company_name,
+            "Ticker": ticker,
+            "Status": f"Error: {exc}",
+        }
+
+
+def render_nifty_50_batch_monte_carlo():
+    st.title("NIFTY 50 Monte Carlo DCF")
+    st.caption("Batch intrinsic value screen across the NIFTY 50 constituent universe.")
+
+    st.sidebar.markdown("### Batch Controls")
+    forecast_years = st.sidebar.selectbox(
+        "Forecast Years",
+        [5, 7, 10],
+        index=0,
+        key="batch_forecast_years",
+    )
+    simulation_count = st.sidebar.selectbox(
+        "Simulations per Company",
+        [250, 500, 1000, 2500, 5000],
+        index=2,
+        key="batch_simulation_count",
+    )
+    random_seed = st.sidebar.number_input(
+        "Random Seed",
+        min_value=1,
+        max_value=999999,
+        value=42,
+        step=1,
+        key="batch_random_seed",
+    )
+    selected_companies = st.sidebar.multiselect(
+        "Companies",
+        list(NIFTY_50_COMPANIES.keys()),
+        default=list(NIFTY_50_COMPANIES.keys()),
+        key="batch_companies",
+    )
+
+    if not selected_companies:
+        st.info("Select at least one company to run the batch valuation.")
+        return
+
+    st.write(
+        f"Ready to run {simulation_count:,} simulations each for "
+        f"{len(selected_companies)} companies."
+    )
+
+    if not st.button("Run NIFTY 50 Batch Valuation", type="primary"):
+        st.info("Use the batch button to start the all-company Monte Carlo DCF run.")
+        return
+
+    selected_items = [
+        (company, NIFTY_50_COMPANIES[company])
+        for company in selected_companies
+    ]
+
+    progress = st.progress(0)
+    status_line = st.empty()
+    started_at = time.perf_counter()
+    rows = []
+
+    for index, (company_name, ticker) in enumerate(selected_items, start=1):
+        status_line.write(f"Valuing {company_name} ({ticker})...")
+        rows.append(
+            calculate_company_monte_carlo_summary(
+                company_name=company_name,
+                ticker=ticker,
+                simulation_count=simulation_count,
+                forecast_years=forecast_years,
+                random_seed=int(random_seed) + index,
+            )
+        )
+        progress.progress(index / len(selected_items))
+
+    runtime_seconds = time.perf_counter() - started_at
+    status_line.write(
+        f"Completed {len(selected_items)} companies in {runtime_seconds:.1f}s."
+    )
+
+    summary_df = pd.DataFrame(rows)
+    success_df = summary_df[summary_df["Status"].eq("OK")].copy()
+    error_df = summary_df[~summary_df["Status"].eq("OK")].copy()
+
+    if success_df.empty:
+        st.error("No companies returned enough financial data for Monte Carlo DCF.")
+        st.dataframe(summary_df, use_container_width=True, hide_index=True)
+        return
+
+    success_df = success_df.sort_values(
+        ["Margin of Safety", "Probability Undervalued"],
+        ascending=[False, False],
+    )
+
+    top_company = success_df.iloc[0]
+    metric_cols = st.columns(4)
+    metric_cols[0].metric("Companies Valued", f"{len(success_df)}")
+    metric_cols[1].metric("Data Issues", f"{len(error_df)}")
+    metric_cols[2].metric(
+        "Top Margin of Safety",
+        _format_percent(top_company["Margin of Safety"]),
+        top_company["Company"],
+    )
+    metric_cols[3].metric(
+        "Top Undervaluation Probability",
+        _format_percent(success_df["Probability Undervalued"].max()),
+    )
+
+    display_df = success_df.copy()
+    for column in [
+        "Current Price",
+        "Fair Value Mean",
+        "Median Value",
+        "Bear Case P10",
+        "Bull Case P90",
+    ]:
+        display_df[column] = display_df.apply(
+            lambda row: format_money(row[column], row["Currency"], compact=False),
+            axis=1,
+        )
+
+    for column in [
+        "Probability Undervalued",
+        "Margin of Safety",
+        "Upside to Mean",
+        "Revenue Growth Mean",
+        "EBIT Margin Mean",
+        "WACC Mean",
+        "Terminal Growth Mean",
+    ]:
+        display_df[column] = display_df[column].apply(_format_percent)
+
+    st.markdown("### NIFTY 50 Valuation Ranking")
+    st.dataframe(display_df, use_container_width=True, hide_index=True)
+
+    chart_df = success_df.head(15).copy()
+    chart_df["Margin of Safety %"] = chart_df["Margin of Safety"] * 100.0
+    fig = px.bar(
+        chart_df,
+        x="Margin of Safety %",
+        y="Company",
+        orientation="h",
+        color="Probability Undervalued",
+        hover_data=["Ticker", "Current Price", "Fair Value Mean"],
+        title="Top Monte Carlo DCF Opportunities",
+    )
+    fig.update_layout(
+        template="plotly_dark",
+        yaxis={"categoryorder": "total ascending"},
+        height=520,
+        margin=dict(l=20, r=20, t=55, b=40),
+    )
+    st.plotly_chart(fig, use_container_width=True, key="batch_margin_chart")
+
+    if not error_df.empty:
+        with st.expander("Companies skipped or partially unavailable"):
+            st.dataframe(error_df, use_container_width=True, hide_index=True)
+
+    st.download_button(
+        "Download Batch Summary CSV",
+        data=success_df.to_csv(index=False).encode("utf-8"),
+        file_name="nifty_50_monte_carlo_dcf_summary.csv",
+        mime="text/csv",
+    )
 
 
 def _pct_input(
@@ -149,11 +387,46 @@ def _display_statement_expander(title, statement, currency):
 
 
 def render_monte_carlo_dcf(default_ticker: str = "RELIANCE.NS"):
+    st.sidebar.subheader("Monte Carlo DCF")
+    scope = st.sidebar.radio(
+        "Valuation Scope",
+        ["Single Company", "NIFTY 50 Batch"],
+        index=0,
+        key="mc_scope",
+    )
+
+    if scope == "NIFTY 50 Batch":
+        render_nifty_50_batch_monte_carlo()
+        return
+
     st.title("Monte Carlo DCF")
     st.caption("Distribution-based intrinsic value engine using Yahoo Finance statements and vectorized NumPy simulations.")
 
-    st.sidebar.subheader("Monte Carlo DCF")
-    ticker = st.sidebar.text_input("Stock Ticker", value=default_ticker, key="mc_ticker").strip().upper()
+    company_options = ["Custom Ticker"] + list(NIFTY_50_COMPANIES.keys())
+    default_company = next(
+        (
+            company
+            for company, symbol in NIFTY_50_COMPANIES.items()
+            if symbol == default_ticker
+        ),
+        "Custom Ticker",
+    )
+    selected_company = st.sidebar.selectbox(
+        "NIFTY 50 Company",
+        company_options,
+        index=company_options.index(default_company),
+        key="mc_company",
+    )
+
+    if selected_company == "Custom Ticker":
+        ticker = st.sidebar.text_input(
+            "Stock Ticker",
+            value=default_ticker,
+            key="mc_ticker",
+        ).strip().upper()
+    else:
+        ticker = NIFTY_50_COMPANIES[selected_company]
+        st.sidebar.caption(ticker)
 
     if not ticker:
         st.info("Enter a ticker to begin.")
